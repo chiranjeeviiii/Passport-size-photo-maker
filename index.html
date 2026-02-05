@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chiranjeevi – Passport Photo Maker</title>
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- jsPDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+
+<body>
+
+<header>
+  <h1>Chiranjeevi</h1>
+  <p>Passport Photo Layout Tool</p>
+</header>
+
+<main>
+
+  <!-- Upload -->
+  <div class="card">
+    <label><strong>Upload Photo</strong></label>
+    <input type="file" id="fileInput" accept="image/*">
+  </div>
+
+  <!-- Crop -->
+  <div class="card" id="cropBox" hidden>
+    <label><strong>Crop Photo</strong></label>
+    <canvas id="cropCanvas"
+      style="width:100%; max-width:100%; touch-action:none; border-radius:8px;">
+    </canvas>
+    <p style="font-size:12px;color:#666">
+      Drag to move • Drag corner to resize (ratio locked)
+    </p>
+  </div>
+
+  <!-- Controls -->
+  <div class="card" id="controls" hidden>
+    <label>Photo Size</label>
+    <select id="sizeSelect">
+      <option value="2x2">2 × 2 inch</option>
+      <option value="3.5x4.5">3.5 × 4.5 cm</option>
+      <option value="5x5">5 × 5 cm</option>
+    </select>
+
+    <label>Number of Copies</label>
+    <input type="range" id="countSlider" min="4" max="20" value="8">
+    <div id="countLabel">8 copies</div>
+  </div>
+
+  <!-- Preview -->
+  <div class="card" id="previewBox" hidden>
+    <label><strong>Preview (Print Layout)</strong></label>
+    <canvas id="previewCanvas"></canvas>
+  </div>
+
+  <!-- Download -->
+  <div class="card" id="downloadBox" hidden>
+    <button id="pdfBtn">Download PDF</button>
+    <button id="jpgBtn">Download JPG</button>
+    <button id="pngBtn">Download PNG</button>
+  </div>
+
+</main>
+
+<footer>
+  © 2025 Chiranjeevi
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
