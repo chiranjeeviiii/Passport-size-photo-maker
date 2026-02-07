@@ -1,4 +1,6 @@
 // ================= CONFIG =================
+const BG_API = "https://bg-remover-backend-3dz2.onrender.com/remove-background";
+
 const A4_W = 2480;
 const A4_H = 3508;
 const DPI = 300;
@@ -15,27 +17,35 @@ const SIZES = {
 
 // ================= ELEMENTS =================
 const fileInput = document.getElementById("fileInput");
+const removeBgToggle = document.getElementById("removeBgToggle");
+const removeBgBtn = document.getElementById("removeBgBtn");
+const bgColorSelect = document.getElementById("bgColor");
+const brightnessSlider = document.getElementById("brightness");
+
 const sizeSelect = document.getElementById("sizeSelect");
 const countSlider = document.getElementById("countSlider");
 const countLabel = document.getElementById("countLabel");
 
-const cropBox = document.getElementById("cropBox");
 const cropCanvas = document.getElementById("cropCanvas");
 const cropCtx = cropCanvas.getContext("2d");
 
 const previewCanvas = document.getElementById("previewCanvas");
 const previewCtx = previewCanvas.getContext("2d");
 
-const controls = document.getElementById("controls");
-const previewBox = document.getElementById("previewBox");
-const downloadBox = document.getElementById("downloadBox");
-
 const pdfBtn = document.getElementById("pdfBtn");
 const jpgBtn = document.getElementById("jpgBtn");
 const pngBtn = document.getElementById("pngBtn");
 
+const imageOptions = document.getElementById("imageOptions");
+const cropBox = document.getElementById("cropBox");
+const controls = document.getElementById("controls");
+const previewBox = document.getElementById("previewBox");
+const downloadBox = document.getElementById("downloadBox");
+
 // ================= STATE =================
-let image = null;
+let originalImage = null;
+let bgRemovedImage = null;
+let workingImage = null;
 let croppedImage = null;
 let copyCount = 8;
 
@@ -47,94 +57,169 @@ let startY = 0;
 
 // ================= HELPERS =================
 function getCropAspect() {
-  const s = SIZES[sizeSelect.value];
-  return s.w / s.h;
+  return SIZES[sizeSelect.value].w / SIZES[sizeSelect.value].h;
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
 }
 
 function getCanvasPoint(e) {
-  const rect = cropCanvas.getBoundingClientRect();
-  const scaleX = cropCanvas.width / rect.width;
-  const scaleY = cropCanvas.height / rect.height;
+  const r = cropCanvas.getBoundingClientRect();
   return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY
+    x: (e.clientX - r.left) * (cropCanvas.width / r.width),
+    y: (e.clientY - r.top) * (cropCanvas.height / r.height)
   };
 }
 
 // ================= UPLOAD =================
 fileInput.onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
   const img = new Image();
   img.onload = () => {
-    image = img;
+    originalImage = img;
+    bgRemovedImage = null;
 
-    cropCanvas.width = img.width;
-    cropCanvas.height = img.height;
-
-    const aspect = getCropAspect();
-    const w = img.width * 0.6;
-    const h = w / aspect;
-
-    crop = {
-      x: (img.width - w) / 2,
-      y: (img.height - h) / 2,
-      w,
-      h
-    };
-
+    imageOptions.hidden = false;
     cropBox.hidden = false;
     controls.hidden = false;
     previewBox.hidden = false;
     downloadBox.hidden = false;
 
-    drawCrop();
+    rebuildWorkingImage();
   };
-  img.src = URL.createObjectURL(e.target.files[0]);
+
+  img.src = URL.createObjectURL(file);
 };
 
-// ================= DRAW CROP (FIXED) =================
+// ================= BACKGROUND REMOVAL =================
+async function removeBackground() {
+  const blob = await fetch(originalImage.src).then(r => r.blob());
+  const fd = new FormData();
+  fd.append("file", blob, "image.png");
+
+  const res = await fetch(BG_API, { method: "POST", body: fd });
+  if (!res.ok) throw new Error("Background removal failed");
+
+  const outBlob = await res.blob();
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.src = URL.createObjectURL(outBlob);
+  });
+}
+
+// ================= IMAGE PIPELINE =================
+function rebuildWorkingImage() {
+  // 🔥 SINGLE SOURCE OF TRUTH
+  const base =
+    removeBgToggle.checked && bgRemovedImage
+      ? bgRemovedImage
+      : originalImage;
+
+  const c = document.createElement("canvas");
+  c.width = base.width;
+  c.height = base.height;
+  const ctx = c.getContext("2d");
+
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.fillStyle = bgColorSelect.value;
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(base, 0, 0);
+
+  const delta = Number(brightnessSlider.value) * 2.55;
+  if (delta !== 0) {
+    const imgData = ctx.getImageData(0, 0, c.width, c.height);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = clamp(d[i] + delta, 0, 255);
+      d[i + 1] = clamp(d[i + 1] + delta, 0, 255);
+      d[i + 2] = clamp(d[i + 2] + delta, 0, 255);
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  workingImage = c;
+  initCrop();
+}
+
+// ================= BG TOGGLE (FIXED) =================
+removeBgToggle.onchange = () => {
+  removeBgBtn.disabled = !removeBgToggle.checked;
+
+  // 🔥 FORCE REBUILD ON TOGGLE
+  rebuildWorkingImage();
+};
+
+removeBgBtn.onclick = async () => {
+  removeBgBtn.textContent = "Removing...";
+  removeBgBtn.disabled = true;
+
+  if (!bgRemovedImage) {
+    bgRemovedImage = await removeBackground();
+  }
+
+  rebuildWorkingImage();
+  removeBgBtn.textContent = "Background Removed";
+};
+
+// ================= CROP =================
+function initCrop() {
+  cropCanvas.width = workingImage.width;
+  cropCanvas.height = workingImage.height;
+
+  const aspect = getCropAspect();
+  const w = workingImage.width * 0.6;
+  const h = w / aspect;
+
+  crop = {
+    x: (workingImage.width - w) / 2,
+    y: (workingImage.height - h) / 2,
+    w,
+    h
+  };
+
+  drawCrop();
+}
+
 function drawCrop() {
   cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
+  cropCtx.drawImage(workingImage, 0, 0);
 
-  // Draw full image
-  cropCtx.drawImage(image, 0, 0);
-
-  // Dark overlay
   cropCtx.fillStyle = "rgba(0,0,0,0.45)";
   cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
 
-  // Draw image again inside crop (VISIBLE AREA)
   cropCtx.save();
   cropCtx.beginPath();
   cropCtx.rect(crop.x, crop.y, crop.w, crop.h);
   cropCtx.clip();
-  cropCtx.drawImage(image, 0, 0);
+  cropCtx.drawImage(workingImage, 0, 0);
   cropCtx.restore();
 
-  // Crop border
   cropCtx.strokeStyle = "#00aaff";
   cropCtx.lineWidth = 3;
   cropCtx.strokeRect(crop.x, crop.y, crop.w, crop.h);
 
-  updateCroppedImage();
+  updateCropped();
 }
 
-function updateCroppedImage() {
-  const temp = document.createElement("canvas");
-  temp.width = crop.w;
-  temp.height = crop.h;
-
-  temp.getContext("2d").drawImage(
-    image,
+function updateCropped() {
+  const t = document.createElement("canvas");
+  t.width = crop.w;
+  t.height = crop.h;
+  t.getContext("2d").drawImage(
+    workingImage,
     crop.x, crop.y, crop.w, crop.h,
     0, 0, crop.w, crop.h
   );
-
-  croppedImage = temp;
+  croppedImage = t;
   renderPreview();
 }
 
-// ================= POINTER EVENTS =================
-cropCanvas.addEventListener("pointerdown", e => {
+// ================= POINTER =================
+cropCanvas.onpointerdown = e => {
   const p = getCanvasPoint(e);
   startX = p.x;
   startY = p.y;
@@ -145,16 +230,18 @@ cropCanvas.addEventListener("pointerdown", e => {
   ) {
     resizing = true;
   } else if (
-    startX > crop.x && startX < crop.x + crop.w &&
-    startY > crop.y && startY < crop.y + crop.h
+    startX > crop.x &&
+    startX < crop.x + crop.w &&
+    startY > crop.y &&
+    startY < crop.y + crop.h
   ) {
     dragging = true;
   }
 
   cropCanvas.setPointerCapture(e.pointerId);
-});
+};
 
-cropCanvas.addEventListener("pointermove", e => {
+cropCanvas.onpointermove = e => {
   if (!dragging && !resizing) return;
 
   const p = getCanvasPoint(e);
@@ -162,28 +249,29 @@ cropCanvas.addEventListener("pointermove", e => {
   const dy = p.y - startY;
 
   if (dragging) {
-    crop.x += dx;
-    crop.y += dy;
+    crop.x = clamp(crop.x + dx, 0, cropCanvas.width - crop.w);
+    crop.y = clamp(crop.y + dy, 0, cropCanvas.height - crop.h);
   }
 
   if (resizing) {
-    const aspect = getCropAspect();
-    crop.w += dx;
-    crop.h = crop.w / aspect;
+    crop.w = clamp(crop.w + dx, 50, cropCanvas.width - crop.x);
+    crop.h = crop.w / getCropAspect();
   }
 
   startX = p.x;
   startY = p.y;
-
   drawCrop();
-});
+};
 
-cropCanvas.addEventListener("pointerup", () => {
+cropCanvas.onpointerup = () => {
   dragging = false;
   resizing = false;
-});
+};
 
 // ================= CONTROLS =================
+bgColorSelect.onchange = rebuildWorkingImage;
+brightnessSlider.oninput = rebuildWorkingImage;
+
 countSlider.oninput = () => {
   copyCount = +countSlider.value;
   countLabel.textContent = `${copyCount} copies`;
@@ -191,7 +279,6 @@ countSlider.oninput = () => {
 };
 
 sizeSelect.onchange = () => {
-  if (!image) return;
   crop.h = crop.w / getCropAspect();
   drawCrop();
 };
@@ -207,67 +294,70 @@ function renderPreview() {
   previewCtx.fillStyle = "#fff";
   previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
 
-  const size = SIZES[sizeSelect.value];
-  const pw = size.w * scale;
-  const ph = size.h * scale;
-
+  const s = SIZES[sizeSelect.value];
+  const pw = s.w * scale;
+  const ph = s.h * scale;
   const usableW = previewCanvas.width - MARGIN * scale * 2;
   const cols = Math.floor((usableW + GAP * scale) / (pw + GAP * scale));
 
   for (let i = 0; i < copyCount; i++) {
     const r = Math.floor(i / cols);
     const c = i % cols;
-
     previewCtx.drawImage(
       croppedImage,
       MARGIN * scale + c * (pw + GAP * scale),
       MARGIN * scale + r * (ph + GAP * scale),
-      pw, ph
+      pw,
+      ph
     );
   }
 }
 
 // ================= DOWNLOAD =================
-pdfBtn.onclick = () => download("pdf");
-jpgBtn.onclick = () => download("jpg");
-pngBtn.onclick = () => download("png");
+[pdfBtn, jpgBtn, pngBtn].forEach(btn =>
+  btn.onclick = () =>
+    download(
+      btn.id.includes("pdf")
+        ? "pdf"
+        : btn.id.includes("jpg")
+        ? "jpg"
+        : "png"
+    )
+);
 
 function download(type) {
-  if (!croppedImage) return;
-
   const canvas = document.createElement("canvas");
   canvas.width = A4_W;
   canvas.height = A4_H;
-
   const ctx = canvas.getContext("2d");
+
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, A4_W, A4_H);
 
-  const size = SIZES[sizeSelect.value];
-  const usableW = A4_W - MARGIN * 2;
-  const cols = Math.floor((usableW + GAP) / (size.w + GAP));
+  const s = SIZES[sizeSelect.value];
+  const cols = Math.floor((A4_W - MARGIN * 2 + GAP) / (s.w + GAP));
 
   for (let i = 0; i < copyCount; i++) {
     const r = Math.floor(i / cols);
     const c = i % cols;
-
     ctx.drawImage(
       croppedImage,
-      MARGIN + c * (size.w + GAP),
-      MARGIN + r * (size.h + GAP),
-      size.w, size.h
+      MARGIN + c * (s.w + GAP),
+      MARGIN + r * (s.h + GAP),
+      s.w,
+      s.h
     );
   }
 
   if (type === "pdf") {
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ unit: "px", format: [A4_W, A4_H] });
-    pdf.addImage(canvas, "PNG", 0, 0, A4_W, A4_H);
+    pdf.addImage(canvas, "PNG", 0, 0);
     pdf.save("passport_photos.pdf");
   } else {
-    const link = document.createElement("a");
-    link.download = `passport_photos.${type}`;
-    link.href = canvas.toDataURL(`image/${type}`, 1.0);
-    link.click();
+    const a = document.createElement("a");
+    a.download = `passport_photos.${type}`;
+    a.href = canvas.toDataURL(`image/${type}`, 1);
+    a.click();
   }
 }
